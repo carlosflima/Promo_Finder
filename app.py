@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,6 +12,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from config import AUTO_REFRESH_MINUTES, MIN_DISCOUNT_PERCENT, CACHE_FILE, DATA_DIR, HISTORY_DIR
 from agents.scraper import run_all_agents, filter_by_discount
 from utils.pdf_export import export_products_to_pdf
+from app.api.purchase_lists import create_list
+from app.repository.purchase_list_repository import PurchaseListRepository
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("promo_agent.app")
@@ -20,6 +22,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 _lock = threading.Lock()
 _state = {"all_products": [], "last_updated": None, "next_update": None, "min_discount": MIN_DISCOUNT_PERCENT, "is_refreshing": False}
+purchase_lists = PurchaseListRepository()
 
 
 def _persist_cache():
@@ -113,6 +116,63 @@ def api_refresh():
         next_update = _state["next_update"]
     visible_products = filter_by_discount(all_products, min_discount=min_discount, ignore_discount=ignore_discount)
     return jsonify({"ok": True, "count": len(visible_products), "total_collected": len(all_products), "last_updated": last_updated, "next_update": next_update})
+
+
+@app.route("/api/purchase-lists", methods=["GET", "POST"])
+def api_purchase_lists():
+    if request.method == "GET":
+        return jsonify({"lists": purchase_lists.list_all()})
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("name", "")).strip()
+    if not name:
+        return jsonify({"ok": False, "error": "Informe um nome para a lista."}), 400
+    data = create_list(name, purchase_lists)
+    return jsonify({"ok": True, "list": data}), 201
+
+
+@app.route("/api/purchase-lists/<list_id>", methods=["GET", "PUT", "DELETE"])
+def api_purchase_list(list_id):
+    if request.method == "GET":
+        data = purchase_lists.get(list_id)
+        if data is None:
+            return jsonify({"error": "Lista não encontrada."}), 404
+        return jsonify(data)
+    if request.method == "DELETE":
+        if not purchase_lists.delete(list_id):
+            return jsonify({"error": "Lista não encontrada."}), 404
+        return jsonify({"ok": True})
+
+    current = purchase_lists.get(list_id)
+    if current is None:
+        return jsonify({"error": "Lista não encontrada."}), 404
+    body = request.get_json(silent=True) or {}
+    if "name" in body:
+        current["name"] = str(body["name"]).strip() or current["name"]
+    if "items" in body:
+        if not isinstance(body["items"], list):
+            return jsonify({"error": "items deve ser uma lista."}), 400
+        current["items"] = body["items"]
+    current["updated_at"] = datetime.now(timezone.utc).isoformat()
+    purchase_lists.save(current)
+    return jsonify({"ok": True, "list": current})
+
+
+@app.route("/api/purchase-lists/<list_id>/generate", methods=["POST"])
+def api_generate_purchase_groups(list_id):
+    data = purchase_lists.get(list_id)
+    if data is None:
+        return jsonify({"error": "Lista não encontrada."}), 404
+    groups = {}
+    for item in data["items"]:
+        store = str(item.get("store") or item.get("site") or "Loja não informada")
+        seller = item.get("seller") or item.get("seller_id")
+        key = f"{store}::{seller or ''}"
+        groups.setdefault(key, {"store": store, "seller": seller, "items": [], "total": 0.0})
+        quantity = max(1, int(item.get("quantity", 1)))
+        unit_total = float(item.get("total_price", item.get("price", 0)) or 0) + float(item.get("shipping_cost", 0) or 0)
+        groups[key]["items"].append(item)
+        groups[key]["total"] += unit_total * quantity
+    return jsonify({"list_id": list_id, "groups": list(groups.values())})
 
 
 @app.route("/api/export-pdf", methods=["POST"])
