@@ -1,0 +1,1 @@
+"""Historical price/search domain."""
