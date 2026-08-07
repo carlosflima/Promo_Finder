@@ -16,8 +16,32 @@
       <button id="refresh">Atualizar agora</button>
       <button id="export">Exportar PDF</button>
     </section>
+
+    <section class="purchase-panel">
+      <div class="purchase-header">
+        <div>
+          <h2>Listas de compra</h2>
+          <p>Selecione ofertas, defina quantidades e salve sua lista.</p>
+        </div>
+        <div class="purchase-actions">
+          <input id="listName" type="text" maxlength="120" placeholder="Nome da nova lista">
+          <button id="createList">Criar lista</button>
+          <select id="savedLists"><option value="">Selecionar lista salva...</option></select>
+          <button id="deleteList" disabled>Excluir</button>
+        </div>
+      </div>
+      <div id="listStatus" class="status"></div>
+      <div class="table-wrap"><table><thead><tr><th>Sel.</th><th>Produto</th><th>Quantidade</th><th>Preço</th><th>Frete</th><th>Loja</th><th>Vendedor</th></tr></thead><tbody id="purchaseSelection"></tbody></table></div>
+      <div class="purchase-footer">
+        <strong id="selectedTotal">Total selecionado: R$ 0,00</strong>
+        <button id="saveList" disabled>Salvar lista</button>
+        <button id="generateList" disabled>Gerar grupos de compra</button>
+      </div>
+      <div id="purchaseGroups"></div>
+    </section>
+
     <section class="status"><span id="status">Carregando...</span></section>
-    <div class="table-wrap"><table><thead><tr><th>Produto</th><th>Preço</th><th>Desconto</th><th>Loja</th><th>Fonte</th><th>Frete</th><th>Link</th></tr></thead><tbody id="products"></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Sel.</th><th>Produto</th><th>Preço</th><th>Desconto</th><th>Loja</th><th>Fonte</th><th>Frete</th><th>Vendedor</th><th>Link</th></tr></thead><tbody id="products"></tbody></table></div>
   </main>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
