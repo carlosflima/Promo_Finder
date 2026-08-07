@@ -1,4 +1,4 @@
-"""Canonical search result models."""
+"""Canonical search query and offer models."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,6 +10,10 @@ class SearchQuery:
     term: str
     cep: Optional[str] = None
     ignore_shipping: bool = False
+    required_sites: tuple[str, ...] = ()
+    discover_sites: bool = True
+    top_site_count: int = 3
+    max_items_per_site: int = 5
 
 
 @dataclass
