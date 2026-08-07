@@ -1,4 +1,4 @@
-"""Canonical search and offer models."""
+"""Canonical search query and offer models."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,7 +11,11 @@ class SearchQuery:
     cep: Optional[str] = None
     ignore_shipping: bool = False
     explicit_sites: tuple[str, ...] = ()
+    # Alias retained for the selection engine and backwards-compatible callers.
+    required_sites: tuple[str, ...] = ()
     discover_sites: bool = True
+    top_site_count: int = 3
+    max_items_per_site: int = 5
 
 
 @dataclass
