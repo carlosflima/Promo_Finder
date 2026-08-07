@@ -1,4 +1,4 @@
-"""Canonical search result models."""
+"""Canonical search and offer models."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,6 +10,8 @@ class SearchQuery:
     term: str
     cep: Optional[str] = None
     ignore_shipping: bool = False
+    explicit_sites: tuple[str, ...] = ()
+    discover_sites: bool = True
 
 
 @dataclass
@@ -26,6 +28,9 @@ class SearchResult:
     rating: Optional[float] = None
     seller_rating: Optional[float] = None
     source_priority: int = 0
+    marketplace: bool = False
+    store_verified: bool = False
+    seller_verified: bool = False
     metadata: dict = field(default_factory=dict)
 
     @property
@@ -33,3 +38,17 @@ class SearchResult:
         if self.shipping is None:
             return self.price
         return self.price + self.shipping
+
+    @property
+    def provenance_score(self) -> float:
+        """Transparent trust contribution; not a substitute for verification."""
+        score = 0.0
+        if self.store_verified:
+            score += 0.5
+        if self.seller_verified:
+            score += 0.5
+        if self.rating is not None:
+            score += min(max(self.rating, 0.0), 5.0) / 10
+        if self.seller_rating is not None:
+            score += min(max(self.seller_rating, 0.0), 5.0) / 10
+        return score
