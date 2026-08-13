@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Motor inicial de coleta de promoções.
-
-A primeira versão mantém adaptadores independentes para fontes públicas e
-um fallback local para que a interface permaneça utilizável quando uma
-fonte bloquear requisições automatizadas.
-"""
+"""Motor de coleta de promoções e pesquisa genérica por termo."""
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +7,7 @@ import re
 import time
 from dataclasses import asdict, dataclass
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,13 +31,17 @@ class Product:
     shipping: str = ""
     coupon_code: str = ""
     category: str = "Outros"
+    seller: str = ""
+    shipping_cost: float = 0.0
+    promotional: bool = False
+    promotion_description: str = ""
 
     def to_dict(self):
         return asdict(self)
 
 
 def parse_price(raw: str) -> Optional[float]:
-    if not raw:
+    if raw is None:
         return None
     text = re.sub(r"[^0-9,.]", "", str(raw))
     if not text:
@@ -78,9 +77,7 @@ def _request(url: str):
 def _extract_generic_cards(html: str, base_url: str, site_name: str):
     soup = BeautifulSoup(html, "lxml")
     products = []
-    selectors = [
-        "article", ".product", ".product-card", ".offer", ".deal", "[data-testid*='product']",
-    ]
+    selectors = ["article", ".product", ".product-card", ".offer", ".deal", "[data-testid*='product']"]
     cards = []
     for selector in selectors:
         cards.extend(soup.select(selector))
@@ -102,80 +99,61 @@ def _extract_generic_cards(html: str, base_url: str, site_name: str):
         if not title or price is None or href in seen:
             continue
         seen.add(href)
-        products.append({
-            "title": title, "price": price, "link": href,
-            "store": _domain_to_store_name(href), "site": site_name,
-        })
+        products.append({"title": title, "price": price, "link": href, "store": _domain_to_store_name(href), "site": site_name})
     return products
 
 
 class BaseAgent:
     name = "Fonte"
     url = ""
-
     def search(self) -> list[dict]:
         raise NotImplementedError
 
 
 class UrlAgent(BaseAgent):
-    def __init__(self, name: str, url: str):
+    def __init__(self, name: str, url: str, term: str = ""):
         self.name = name
         self.url = url
+        self.term = term.strip()
+
+    def _candidate_urls(self):
+        if not self.term:
+            return [self.url]
+        encoded = quote_plus(self.term)
+        base = self.url.rstrip("/")
+        return [f"{base}/search?q={encoded}", f"{base}/busca?q={encoded}", f"{base}?q={encoded}"]
 
     def search(self):
-        try:
-            response = _request(self.url)
-            return _extract_generic_cards(response.text, self.url, self.name)
-        except requests.RequestException:
-            return []
-        finally:
-            time.sleep(REQUEST_DELAY)
+        for candidate in self._candidate_urls():
+            try:
+                response = _request(candidate)
+                products = _extract_generic_cards(response.text, candidate, self.name)
+                if products:
+                    return products[:MAX_ITEMS_PER_SITE]
+            except requests.RequestException:
+                continue
+        time.sleep(REQUEST_DELAY)
+        return []
 
 
 class PromobitAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Promobit", "https://www.promobit.com.br/ofertas/")
-
-
+    def __init__(self, term=""): super().__init__("Promobit", "https://www.promobit.com.br/ofertas", term)
 class PelandoAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Pelando", "https://www.pelando.com.br/recentes")
-
-
+    def __init__(self, term=""): super().__init__("Pelando", "https://www.pelando.com.br/recentes", term)
 class ZoomAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Zoom", "https://www.zoom.com.br")
-
-
+    def __init__(self, term=""): super().__init__("Zoom", "https://www.zoom.com.br", term)
 class BuscapeAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Buscapé", "https://www.buscape.com.br")
-
-
+    def __init__(self, term=""): super().__init__("Buscapé", "https://www.buscape.com.br", term)
 class AmazonOfertasAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Amazon Brasil", "https://www.amazon.com.br/gp/goldbox")
-
-
+    def __init__(self, term=""): super().__init__("Amazon Brasil", "https://www.amazon.com.br/gp/goldbox", term)
 class MagazineLuizaOfertasAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Magazine Luiza", "https://www.magazineluiza.com.br")
-
-
+    def __init__(self, term=""): super().__init__("Magazine Luiza", "https://www.magazineluiza.com.br", term)
 class CasasBahiaOfertasAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("Casas Bahia", "https://www.casasbahia.com.br")
-
-
+    def __init__(self, term=""): super().__init__("Casas Bahia", "https://www.casasbahia.com.br", term)
 class KabumOfertasAgent(UrlAgent):
-    def __init__(self):
-        super().__init__("KaBuM!", "https://www.kabum.com.br")
+    def __init__(self, term=""): super().__init__("KaBuM!", "https://www.kabum.com.br", term)
 
-
-AGENTS = [
-    PromobitAgent(), PelandoAgent(), ZoomAgent(), BuscapeAgent(),
-    AmazonOfertasAgent(), MagazineLuizaOfertasAgent(), CasasBahiaOfertasAgent(), KabumOfertasAgent(),
-]
+AGENT_FACTORIES = [PromobitAgent, PelandoAgent, ZoomAgent, BuscapeAgent, AmazonOfertasAgent, MagazineLuizaOfertasAgent, CasasBahiaOfertasAgent, KabumOfertasAgent]
 
 
 def normalize_item(raw: dict) -> Optional[Product]:
@@ -185,49 +163,46 @@ def normalize_item(raw: dict) -> Optional[Product]:
         return None
     original = raw.get("original_price")
     original = parse_price(original) if original and not isinstance(original, (int, float)) else original
-    discount = 0.0
-    if original and original > price:
-        discount = round((1 - price / original) * 100, 1)
-    product = Product(
-        id=raw.get("id") or slugify_id(title, raw.get("link"), price),
-        title=title,
-        price=price,
-        original_price=original,
-        discount_percent=discount,
-        store=raw.get("store") or _domain_to_store_name(raw.get("link", "")),
-        site=raw.get("site") or "",
-        link=raw.get("link") or "",
-        image=raw.get("image") or "",
-        installment=raw.get("installment") or "",
-        shipping=raw.get("shipping") or "",
-        coupon_code=raw.get("coupon_code") or "",
-        category=raw.get("category") or categorize(title),
-    )
-    return product
+    discount = round((1 - price / original) * 100, 1) if original and original > price else 0.0
+    return Product(id=raw.get("id") or slugify_id(title, raw.get("link"), price), title=title, price=price,
+        original_price=original, discount_percent=discount, store=raw.get("store") or _domain_to_store_name(raw.get("link", "")),
+        site=raw.get("site") or "", link=raw.get("link") or "", image=raw.get("image") or "",
+        installment=raw.get("installment") or "", shipping=raw.get("shipping") or "", coupon_code=raw.get("coupon_code") or "",
+        category=raw.get("category") or categorize(title), seller=raw.get("seller") or "",
+        shipping_cost=float(raw.get("shipping_cost") or 0), promotional=bool(raw.get("promotional") or discount > 0),
+        promotion_description=raw.get("promotion_description") or "")
 
 
 def _sample_data():
-    samples = [
-        {"title": "Smart TV 4K 55 polegadas", "price": 2499.90, "original_price": 3199.90, "store": "Oferta demonstrativa", "site": "Fallback"},
-        {"title": "Notebook Intel Core i5 16GB", "price": 2899.00, "original_price": 3499.00, "store": "Oferta demonstrativa", "site": "Fallback"},
-    ]
-    return [normalize_item(item).to_dict() for item in samples if normalize_item(item)]
+    samples = [{"title": "Smart TV 4K 55 polegadas", "price": 2499.90, "original_price": 3199.90, "store": "Oferta demonstrativa", "site": "Fallback"},
+               {"title": "Notebook Intel Core i5 16GB", "price": 2899.00, "original_price": 3499.00, "store": "Oferta demonstrativa", "site": "Fallback"}]
+    return [p.to_dict() for p in (normalize_item(x) for x in samples) if p]
 
 
-def run_all_agents() -> list[dict]:
-    results = []
-    seen = set()
-    for agent in AGENTS:
+def run_agents(term="", custom_sites=None) -> list[dict]:
+    agents = [factory(term) for factory in AGENT_FACTORIES]
+    for site in custom_sites or []:
+        if isinstance(site, dict):
+            name, url = site.get("name") or _domain_to_store_name(site.get("url", "")), site.get("url", "")
+        else:
+            url, name = str(site), _domain_to_store_name(str(site))
+        if url:
+            agents.append(UrlAgent(name, url, term))
+    results, seen = [], set()
+    for agent in agents:
         try:
             for raw in agent.search():
                 item = normalize_item(raw)
                 if not item or item.link in seen:
                     continue
-                seen.add(item.link)
-                results.append(item.to_dict())
+                seen.add(item.link); results.append(item.to_dict())
         except Exception:
             continue
     return results or _sample_data()
+
+
+def run_all_agents() -> list[dict]:
+    return run_agents()
 
 
 def filter_by_discount(products: list[dict], min_discount: int = 25, ignore_discount: bool = False):
