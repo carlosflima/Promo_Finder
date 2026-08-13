@@ -5,12 +5,13 @@ import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from config import AUTO_REFRESH_MINUTES, MIN_DISCOUNT_PERCENT, CACHE_FILE, DATA_DIR, HISTORY_DIR
-from agents.scraper import run_all_agents, filter_by_discount
+from agents.scraper import run_all_agents, run_agents, filter_by_discount
 from utils.pdf_export import export_products_to_pdf
 from app.api.purchase_lists import create_list
 from app.repository.purchase_list_repository import PurchaseListRepository
@@ -23,6 +24,7 @@ os.makedirs(HISTORY_DIR, exist_ok=True)
 _lock = threading.Lock()
 _state = {"all_products": [], "last_updated": None, "next_update": None, "min_discount": MIN_DISCOUNT_PERCENT, "is_refreshing": False}
 purchase_lists = PurchaseListRepository()
+_search_settings = {"cep": "", "ignore_shipping": False, "sites": []}
 
 
 def _persist_cache():
@@ -48,13 +50,26 @@ def _parse_bool(value):
     return str(value).strip().lower() in ("1", "true", "sim", "yes", "on")
 
 
-def refresh_products():
+def _valid_site(url):
+    try:
+        parsed = urlparse(str(url).strip())
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https") or not host:
+            return False
+        if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"} or host.startswith(("10.", "192.168.")):
+            return False
+        return True
+    except ValueError:
+        return False
+
+
+def refresh_products(term="", custom_sites=None):
     with _lock:
         if _state["is_refreshing"]:
             return
         _state["is_refreshing"] = True
     try:
-        products = run_all_agents()
+        products = run_agents(term=term, custom_sites=custom_sites)
         with _lock:
             _state["all_products"] = products
             _state["last_updated"] = datetime.now().isoformat()
@@ -72,6 +87,36 @@ scheduler.add_job(refresh_products, "interval", minutes=AUTO_REFRESH_MINUTES, id
 @app.route("/")
 def index():
     return render_template("index.html", refresh_minutes=AUTO_REFRESH_MINUTES, min_discount=MIN_DISCOUNT_PERCENT)
+
+
+@app.route("/api/search-settings", methods=["GET", "PUT"])
+def api_search_settings():
+    if request.method == "GET":
+        return jsonify(_search_settings)
+    body = request.get_json(silent=True) or {}
+    cep = str(body.get("cep", "")).strip()
+    sites = []
+    for raw in body.get("sites", []):
+        url = str(raw.get("url", "") if isinstance(raw, dict) else raw).strip()
+        if _valid_site(url):
+            sites.append({"url": url, "name": str(raw.get("name", "")).strip() if isinstance(raw, dict) else ""})
+    _search_settings.update({"cep": cep, "ignore_shipping": _parse_bool(body.get("ignore_shipping", False)), "sites": sites})
+    return jsonify(_search_settings)
+
+
+@app.route("/api/search", methods=["POST"])
+def api_search():
+    body = request.get_json(silent=True) or {}
+    term = str(body.get("term", "")).strip()
+    if not term:
+        return jsonify({"error": "Informe o produto ou termo de pesquisa."}), 400
+    custom_sites = body.get("sites") if isinstance(body.get("sites"), list) else _search_settings["sites"]
+    custom_sites = [s for s in custom_sites if _valid_site(s.get("url") if isinstance(s, dict) else s)]
+    refresh_products(term=term, custom_sites=custom_sites)
+    with _lock:
+        products = list(_state["all_products"])
+    products.sort(key=lambda p: float(p.get("price", 0) or 0) + (0 if _search_settings["ignore_shipping"] else float(p.get("shipping_cost", 0) or 0)))
+    return jsonify({"products": products[: max(1, len(products))], "count": len(products), "term": term, "settings": _search_settings})
 
 
 @app.route("/api/products")
@@ -141,7 +186,6 @@ def api_purchase_list(list_id):
         if not purchase_lists.delete(list_id):
             return jsonify({"error": "Lista não encontrada."}), 404
         return jsonify({"ok": True})
-
     current = purchase_lists.get(list_id)
     if current is None:
         return jsonify({"error": "Lista não encontrada."}), 404
