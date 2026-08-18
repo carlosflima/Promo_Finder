@@ -6,9 +6,17 @@ from .models import SearchResult
 
 def rank_results(results: list[SearchResult], ignore_shipping: bool = False) -> list[SearchResult]:
     def key(item: SearchResult):
-        shipping = 0 if ignore_shipping else (item.shipping if item.shipping is not None else 0)
-        # Lower total cost wins. Tie-break with promotional status and seller/site.
-        return (item.price + shipping, not item.promotional, -item.source_priority, item.site.lower(), item.title.lower())
+        # A missing shipping quote must not masquerade as free shipping.
+        shipping_known = ignore_shipping or item.shipping is not None
+        shipping = 0.0 if ignore_shipping else (item.shipping if shipping_known else 0.0)
+        return (
+            not shipping_known,
+            item.price + shipping,
+            not item.promotional,
+            -item.source_priority,
+            item.site.lower(),
+            item.title.lower(),
+        )
 
     return sorted(results, key=key)
 
