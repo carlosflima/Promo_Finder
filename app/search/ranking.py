@@ -4,7 +4,7 @@ from __future__ import annotations
 from .models import SearchResult
 
 
-def rank_results(results: list[SearchResult], ignore_shipping: bool = False) -> list[SearchResult]:
+def rank_results(results: list[SearchResult], ignore_shipping: bool = False):
     def key(item: SearchResult):
         # A missing shipping quote must not masquerade as free shipping.
         shipping_known = ignore_shipping or item.shipping is not None
@@ -21,7 +21,7 @@ def rank_results(results: list[SearchResult], ignore_shipping: bool = False) -> 
     return sorted(results, key=key)
 
 
-def top_per_site(results: list[SearchResult], limit: int = 5) -> list[SearchResult]:
+def top_per_site(results: list[SearchResult], limit: int = 5):
     grouped: dict[str, list[SearchResult]] = {}
     for result in results:
         grouped.setdefault(result.site, []).append(result)
